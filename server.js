@@ -85,7 +85,7 @@ async function callGroq(messages, temperature = 0.15) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
     },
-    body: JSON.stringify({ model: 'openai/gpt-oss-120b', temperature, messages }),
+    body: JSON.stringify({ model: 'qwen/qwen3.6-27b', temperature, messages }),
   });
   if (!res.ok) {
     const errText = await res.text();
