@@ -76,23 +76,63 @@ function search(index, queryTokens, topK) {
   return scored.filter(s => s.score > 0).slice(0, topK);
 }
 
-// --- تماس با Groq ---
+// --- تماس با Groq (با زنجیره‌ی مدل جایگزین + پاک‌سازی خودکار متن «فکرکردن») ---
+
+// اگه یه مدل حذف/خراب شد، خودکار میره سراغ بعدی — کاربر چیزی نمی‌فهمه
+const MODEL_CHAIN = [
+  { model: 'qwen/qwen3.6-27b', extra: { reasoning_format: 'hidden' } },
+  { model: 'openai/gpt-oss-120b', extra: { include_reasoning: false } },
+  { model: 'openai/gpt-oss-20b', extra: { include_reasoning: false } },
+];
+
+// لایه‌ی پشتیبان: حتی اگه یه مدل با وجود تنظیمات بالا بازم متن فکرکردن رو درز بده،
+// اینجا خودکار پاکش می‌کنیم تا هیچ‌وقت <think>...</think> به اپ نرسه
+function stripThinking(text) {
+  if (!text) return text;
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
 
 async function callGroq(messages, temperature = 0.15) {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({ model: 'qwen/qwen3.6-27b', temperature, messages }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`خطای Groq: ${errText}`);
+  let lastError = null;
+
+  for (const cfg of MODEL_CHAIN) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          temperature,
+          messages,
+          ...cfg.extra,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`مدل ${cfg.model} خطا داد: ${errText}`);
+      }
+
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content ?? '';
+      const cleaned = stripThinking(content);
+
+      if (!cleaned) {
+        throw new Error(`مدل ${cfg.model} جواب خالی برگردوند`);
+      }
+
+      return cleaned;
+    } catch (err) {
+      console.error(`تلاش با مدل ${cfg.model} شکست خورد:`, err.message);
+      lastError = err;
+      // برو سراغ مدل بعدی توی زنجیره
+    }
   }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? '';
+
+  throw new Error(`همه‌ی مدل‌ها شکست خوردن. آخرین خطا: ${lastError?.message || 'نامشخص'}`);
 }
 
 async function translateToEnglishQuery(question) {
